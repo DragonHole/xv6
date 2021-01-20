@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -105,15 +107,30 @@ walkaddr(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
   uint64 pa;
+  uint64 va2;
 
   if(va >= MAXVA)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
-    return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
+  if(pte == 0 || (*pte & PTE_V) == 0){
+    if(va > myproc()->sz)
+      return 0;
+
+    va2 = PGROUNDDOWN(va);
+    char *mem = kalloc(); // allocate a new page lazily
+    if(mem == 0)
+      return 0;
+
+    memset(mem, 0, PGSIZE);
+    if(mappages(pagetable, va2, PGSIZE, (uint64)mem, PTE_U | PTE_R | PTE_W | PTE_V) != 0){
+      kfree(mem);
+      panic("walkaddr: mappages");
+    }
+    else
+      return (uint64)*mem;
+  }
+
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
@@ -171,7 +188,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0) continue;
+    if((*pte & PTE_V) == 0) continue; // lazy allocation
       //panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
@@ -306,7 +323,9 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      //panic("uvmcopy: page not present");
+      // lazy allocation, unsure if all pte in parent pt are allocated with pa, skip
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)

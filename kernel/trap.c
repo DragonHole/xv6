@@ -69,6 +69,10 @@ usertrap(void)
     // ok
   } else if(r_scause() == 15){
     uint64 va = r_stval();
+
+    if(va > myproc()->sz)
+      panic("usertrap: va>sz");
+
     uint64 pa = (uint64)kalloc();
     if(pa == 0){
       panic("usertrap: kalloc");
